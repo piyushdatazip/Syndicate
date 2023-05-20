@@ -46,7 +46,7 @@ func (g *JSONSchemaGenerator) getDefinitionKey(decl *declInfo) string {
 	}
 
 	if defKey == "" {
-		defKey = g.options.DefinitionPrefix + decl.pkg.Pkg.Path() + "/" + decl.typeSpec.Name.Name
+		defKey = g.options.DefinitionPrefix + decl.pkg.PkgPath + "/" + decl.typeSpec.Name.Name
 	}
 
 	if strings.Contains(defKey, "/vendor/") {
@@ -570,9 +570,12 @@ func (g *JSONSchemaGenerator) generateSchemaFromTypePath(path string, parentKey 
 		}
 	} else {
 		pkgPath, typeName := splitPackageTypePath(path)
-		pkgInfo := g.program.Package(pkgPath)
-		if pkgInfo != nil {
-			typeDecl, err = g.findDeclInfoForPackage(pkgInfo, nil, typeName)
+		pkgs, err := g.loadPackages(pkgPath, g.options)
+		if err != nil {
+			return nil, err
+		}
+		if pkgs != nil {
+			typeDecl, err = g.findDeclInfoForPackage(pkgs[pkgPath], nil, typeName)
 			if err == nil {
 				tmpSchema, err = g.generateSchemaForExpr(typeDecl, typeDecl.typeSpec.Type, nil, parentKey)
 				if err == nil {
@@ -584,6 +587,34 @@ func (g *JSONSchemaGenerator) generateSchemaFromTypePath(path string, parentKey 
 
 	return schemaItem, err
 }
+
+// func (g *JSONSchemaGenerator) generateSchemaFromTypePath(path string, parentKey string) (schema.JSONSchema, error) {
+// 	var err error
+
+// 	var schemaItem schema.JSONSchema
+// 	var tmpSchema schema.JSONSchema
+// 	var typeDecl *declInfo
+// 	var ok bool
+
+// 	if isIdent(path) {
+// 		if tmpSchema, ok, err = g.generateSchemaForBuiltIn(path, nil, parentKey); ok {
+// 			schemaItem = tmpSchema
+// 		}
+// 	} else {
+// 		pkgPath, typeName := splitPackageTypePath(path)
+// 		if pkg != nil {
+// 			typeDecl, err = g.findDeclInfoForPackage(pkg.Types, nil, typeName)
+// 			if err == nil {
+// 				tmpSchema, err = g.generateSchemaForExpr(typeDecl, typeDecl.typeSpec.Type, nil, parentKey)
+// 				if err == nil {
+// 					schemaItem = tmpSchema
+// 				}
+// 			}
+// 		}
+// 	}
+
+// 	return schemaItem, err
+// }
 
 func (g *JSONSchemaGenerator) fieldHasXofAnnotation(field *ast.Field) (bool, error) {
 	hasXOf := false

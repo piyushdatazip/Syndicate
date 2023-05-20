@@ -1,16 +1,19 @@
 package generator
 
 import (
+	"encoding/json"
 	"fmt"
 	"go/ast"
-	goparser "go/parser"
+	"go/parser"
+	"go/token"
 	"go/types"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/brainicorn/ganno"
 	"github.com/piyushsingariya/syndicate/jsonschema/schema"
-	"golang.org/x/tools/go/loader"
+	"golang.org/x/tools/go/packages"
 )
 
 // Options holds the configuration options for the schema generator instance
@@ -37,7 +40,7 @@ type JSONSchemaGenerator struct {
 	rootPackage      string
 	rootType         string
 	options          Options
-	program          *loader.Program
+	pkgs             map[string]*packages.Package
 	annoParser       ganno.AnnotationParser
 	globalDefCache   map[string]*definition
 	embeddedDefCache map[string]*definition
@@ -46,7 +49,7 @@ type JSONSchemaGenerator struct {
 }
 
 type declInfo struct {
-	pkg              *loader.PackageInfo
+	pkg              *packages.Package
 	file             *ast.File
 	decl             *ast.GenDecl
 	typeSpec         *ast.TypeSpec
@@ -72,7 +75,7 @@ func NewOptions() Options {
 	}
 }
 
-func (g *JSONSchemaGenerator) newDeclInfo(pkg *loader.PackageInfo, file *ast.File, decl *ast.GenDecl, spec *ast.TypeSpec) *declInfo {
+func (g *JSONSchemaGenerator) newDeclInfo(pkg *packages.Package, file *ast.File, decl *ast.GenDecl, spec *ast.TypeSpec) *declInfo {
 	di := &declInfo{
 		pkg:      pkg,
 		file:     file,
@@ -97,23 +100,42 @@ func (g *JSONSchemaGenerator) defKeyFromPath(path string) string {
 	return defKey
 }
 
-func (g *JSONSchemaGenerator) loadProgram(basePackage string, options Options) (*loader.Program, error) {
-	if g.program != nil {
-		return g.program, nil
+func (g *JSONSchemaGenerator) loadPackages(basePackage string, options Options) (map[string]*packages.Package, error) {
+	cfg := &packages.Config{
+		Mode: packages.LoadSyntax,
+		// ParserMode: parser.ParseComments,
+		Fset:  token.NewFileSet(),
+		Tests: options.IncludeTests,
 	}
 
-	var scan loader.Config
-
-	scan.ParserMode = goparser.ParseComments
-	scan.TypeCheckFuncBodies = func(path string) bool { return false }
-
-	if options.IncludeTests {
-		scan.ImportWithTests(basePackage)
-	} else {
-		scan.Import(basePackage)
+	pkgs, err := packages.Load(cfg, basePackage)
+	if err != nil {
+		return nil, err
 	}
 
-	return scan.Load()
+	allPkgs := make(map[string]*packages.Package)
+
+	for _, pkg := range pkgs {
+		allPkgs[pkg.PkgPath] = pkg
+	}
+
+	return allPkgs, nil
+	// if g.program != nil {
+	// 	return g.program, nil
+	// }
+
+	// var scan loader.Config
+
+	// scan.ParserMode = goparser.ParseComments
+	// scan.TypeCheckFuncBodies = func(path string) bool { return false }
+
+	// if options.IncludeTests {
+	// 	scan.ImportWithTests(basePackage)
+	// } else {
+	// 	scan.Import(basePackage)
+	// }
+
+	// return scan.Load()
 }
 
 // NewJSONSchemaGenerator creates an instance of the generator.
@@ -137,15 +159,14 @@ func NewJSONSchemaGenerator(basePackage, rootType string, options Options) *JSON
 
 // Generate is the main function that is used to generate a JSONSchema.
 func (g *JSONSchemaGenerator) Generate() (schema.JSONSchema, error) {
-	var program *loader.Program
+	// var program *packages.Package
 	var err error
 	var rootSchema schema.JSONSchema
 
 	start := time.Now()
-	program, err = g.loadProgram(g.basePackage, g.options)
-
+	g.pkgs, err = g.loadPackages(g.basePackage, g.options)
 	if err == nil {
-		g.program = program
+		// g.program = program
 
 		rootSchema, err = g.doGenerate()
 	}
@@ -177,7 +198,7 @@ func (g *JSONSchemaGenerator) doGenerate() (schema.JSONSchema, error) {
 	var rootDeclInfo *declInfo
 	var rootSchema schema.JSONSchema
 
-	rootDeclInfo, err = g.findRootDecl(g.program)
+	rootDeclInfo, err = g.findRootDecl(g.pkgs)
 
 	if err == nil {
 		g.LogVerbose("root decl: ", rootDeclInfo.typeSpec.Name.Name)
@@ -197,43 +218,83 @@ func (g *JSONSchemaGenerator) doGenerate() (schema.JSONSchema, error) {
 	return rootSchema, err
 }
 
-func (g *JSONSchemaGenerator) findRootDecl(program *loader.Program) (*declInfo, error) {
-	var searchPackages map[*types.Package]*loader.PackageInfo
+// func (g *JSONSchemaGenerator) findRootDecl(program *loader.Program) (*declInfo, error) {
+// 	var searchPackages map[*types.Package]*loader.PackageInfo
 
+// 	g.LogDebug("looking for root object")
+
+// 	if baseInfo, ok := program.Imported[g.basePackage]; ok {
+// 		searchPackages = make(map[*types.Package]*loader.PackageInfo)
+// 		searchPackages[baseInfo.Pkg] = baseInfo
+// 	}
+
+// 	if searchPackages == nil {
+// 		for _, pi := range program.AllPackages {
+// 			if pi.Pkg.Path() == g.basePackage {
+// 				searchPackages = make(map[*types.Package]*loader.PackageInfo)
+// 				searchPackages[pi.Pkg] = pi
+// 			}
+// 		}
+// 	}
+
+// 	//let's find the file with the root object in it
+// 	for pkg, pkgInfo := range searchPackages {
+// 		g.LogVerbose("analyzing package: ", pkg.Path())
+
+// 		for _, file := range pkgInfo.Files {
+// 			for _, decl := range file.Decls {
+// 				gd, ok := decl.(*ast.GenDecl)
+// 				if !ok {
+// 					continue
+// 				}
+// 				for _, spc := range gd.Specs {
+// 					if ts, ok := spc.(*ast.TypeSpec); ok {
+// 						if ts.Name.Name == g.rootType {
+// 							g.LogVerboseF("found root decl %s: %#v\n", ts.Name.Name, gd)
+// 							rd := g.newDeclInfo(pkgInfo, file, gd, ts)
+// 							rd.isRoot = true
+// 							return rd, nil
+// 						}
+// 					}
+// 				}
+// 			}
+// 		}
+// 	}
+
+// 	return nil, fmt.Errorf("root not found")
+
+// }
+
+func (g *JSONSchemaGenerator) findRootDecl(pkgs map[string]*packages.Package) (*declInfo, error) {
 	g.LogDebug("looking for root object")
-
-	if baseInfo, ok := program.Imported[g.basePackage]; ok {
-		searchPackages = make(map[*types.Package]*loader.PackageInfo)
-		searchPackages[baseInfo.Pkg] = baseInfo
-	}
-
-	if searchPackages == nil {
-		for _, pi := range program.AllPackages {
-			if pi.Pkg.Path() == g.basePackage {
-				searchPackages = make(map[*types.Package]*loader.PackageInfo)
-				searchPackages[pi.Pkg] = pi
-			}
-		}
+	json.NewEncoder(os.Stdout).Encode(pkgs)
+	baseInfo, ok := pkgs[g.basePackage]
+	if !ok {
+		return nil, fmt.Errorf("root not found")
 	}
 
 	//let's find the file with the root object in it
-	for pkg, pkgInfo := range searchPackages {
-		g.LogVerbose("analyzing package: ", pkg.Path())
+	for _, fi := range baseInfo.GoFiles {
+		// Create a new token file set
+		fset := token.NewFileSet()
 
-		for _, file := range pkgInfo.Files {
-			for _, decl := range file.Decls {
-				gd, ok := decl.(*ast.GenDecl)
-				if !ok {
-					continue
-				}
-				for _, spc := range gd.Specs {
-					if ts, ok := spc.(*ast.TypeSpec); ok {
-						if ts.Name.Name == g.rootType {
-							g.LogVerboseF("found root decl %s: %#v\n", ts.Name.Name, gd)
-							rd := g.newDeclInfo(pkgInfo, file, gd, ts)
-							rd.isRoot = true
-							return rd, nil
-						}
+		file, err := parser.ParseFile(fset, fi, nil, parser.ParseComments)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, decl := range file.Decls {
+			gd, ok := decl.(*ast.GenDecl)
+			if !ok {
+				continue
+			}
+			for _, spc := range gd.Specs {
+				if ts, ok := spc.(*ast.TypeSpec); ok {
+					if ts.Name.Name == g.rootType {
+						g.LogVerboseF("found root decl %s: %#v\n", ts.Name.Name, gd)
+						rd := g.newDeclInfo(baseInfo, file, gd, ts)
+						rd.isRoot = true
+						return rd, nil
 					}
 				}
 			}
@@ -241,7 +302,6 @@ func (g *JSONSchemaGenerator) findRootDecl(program *loader.Program) (*declInfo, 
 	}
 
 	return nil, fmt.Errorf("root not found")
-
 }
 
 func (g *JSONSchemaGenerator) generateObjectSchema(declInfo *declInfo, field *ast.Field, embedded bool, parentKey string) (schema.JSONSchema, error) {
@@ -274,7 +334,7 @@ func (g *JSONSchemaGenerator) generateObjectSchema(declInfo *declInfo, field *as
 
 	g.LogDebug("creating new object schema for struct ", declInfo.defKey)
 
-	objectSchema.SetGoPath(declInfo.pkg.Pkg.Path() + "/" + declInfo.typeSpec.Name.Name)
+	objectSchema.SetGoPath(declInfo.pkg.PkgPath + "/" + declInfo.typeSpec.Name.Name)
 	if err != nil {
 		return nil, err
 	}

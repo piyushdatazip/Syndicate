@@ -9,7 +9,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"golang.org/x/tools/go/loader"
+	"golang.org/x/tools/go/packages"
 )
 
 var builtinTypes = map[string]string{
@@ -41,11 +41,42 @@ var jsonTypes = map[string][]string{
 	"array":   []string{},
 }
 
-func (g *JSONSchemaGenerator) findDeclInfoForPackage(pkg *loader.PackageInfo, file *ast.File, typeToFind string) (*declInfo, error) {
+// func (g *JSONSchemaGenerator) findDeclInfoForPackage(pkg *loader.PackageInfo, file *ast.File, typeToFind string) (*declInfo, error) {
+// 	g.LogDebug("looking for Decl Info...")
+// 	var dInfo *declInfo
+
+// 	// first check the local file
+// 	if file != nil {
+// 		dInfo = g.findDeclInFile(pkg, file, typeToFind)
+// 	}
+
+// 	if dInfo != nil {
+// 		g.LogVerbose("found decl in current file")
+// 		return dInfo, nil
+// 	}
+
+// 	// didn't find it in the current file, look through the rest of the current Package files
+// 	for _, packageFile := range pkg.Files {
+// 		if packageFile == file {
+// 			continue
+// 		}
+
+// 		dInfo = g.findDeclInFile(pkg, packageFile, typeToFind)
+
+// 		if dInfo != nil {
+// 			g.LogVerbose("found decl in package file ", packageFile.Name.Name)
+// 			return dInfo, nil
+// 		}
+// 	}
+
+// 	return nil, fmt.Errorf("could not find type '%s' in package %s", typeToFind, pkg.Pkg.Path())
+// }
+
+func (g *JSONSchemaGenerator) findDeclInfoForPackage(pkg *packages.Package, file *ast.File, typeToFind string) (*declInfo, error) {
 	g.LogDebug("looking for Decl Info...")
 	var dInfo *declInfo
 
-	// first check the local file
+	// First, check the local file
 	if file != nil {
 		dInfo = g.findDeclInFile(pkg, file, typeToFind)
 	}
@@ -55,8 +86,8 @@ func (g *JSONSchemaGenerator) findDeclInfoForPackage(pkg *loader.PackageInfo, fi
 		return dInfo, nil
 	}
 
-	// didn't find it in the current file, look through the rest of the current Package files
-	for _, packageFile := range pkg.Files {
+	// Didn't find it in the current file, look through the rest of the package files
+	for _, packageFile := range pkg.Syntax {
 		if packageFile == file {
 			continue
 		}
@@ -69,15 +100,33 @@ func (g *JSONSchemaGenerator) findDeclInfoForPackage(pkg *loader.PackageInfo, fi
 		}
 	}
 
-	return nil, fmt.Errorf("could not find type '%s' in package %s", typeToFind, pkg.Pkg.Path())
+	return nil, fmt.Errorf("could not find type '%s' in package %s", typeToFind, pkg.PkgPath)
 }
 
 func (g *JSONSchemaGenerator) findDeclInfoForSelector(ownerDecl *declInfo, selector *ast.SelectorExpr) (*declInfo, error) {
-
-	return g.findDeclInfoForPackage(g.program.AllPackages[ownerDecl.pkg.Uses[selector.Sel].Pkg()], nil, selector.Sel.Name)
+	return g.findDeclInfoForPackage(g.pkgs[ownerDecl.pkg.PkgPath], nil, selector.Sel.Name)
 }
 
-func (g *JSONSchemaGenerator) findDeclInFile(pkgInfo *loader.PackageInfo, gofile *ast.File, typeToFind string) *declInfo {
+// func (g *JSONSchemaGenerator) findDeclInFile(pkgInfo *loader.PackageInfo, gofile *ast.File, typeToFind string) *declInfo {
+// 	for _, decl := range gofile.Decls {
+// 		gd, ok := decl.(*ast.GenDecl)
+// 		if !ok {
+// 			continue
+// 		}
+// 		for _, spc := range gd.Specs {
+// 			if ts, ok := spc.(*ast.TypeSpec); ok {
+// 				if ts.Name.Name == typeToFind {
+// 					return g.newDeclInfo(pkgInfo, gofile, gd, ts)
+// 				}
+
+// 			}
+// 		}
+// 	}
+
+// 	return nil
+// }
+
+func (g *JSONSchemaGenerator) findDeclInFile(pkg *packages.Package, gofile *ast.File, typeToFind string) *declInfo {
 	for _, decl := range gofile.Decls {
 		gd, ok := decl.(*ast.GenDecl)
 		if !ok {
@@ -86,9 +135,8 @@ func (g *JSONSchemaGenerator) findDeclInFile(pkgInfo *loader.PackageInfo, gofile
 		for _, spc := range gd.Specs {
 			if ts, ok := spc.(*ast.TypeSpec); ok {
 				if ts.Name.Name == typeToFind {
-					return g.newDeclInfo(pkgInfo, gofile, gd, ts)
+					return g.newDeclInfo(pkg, gofile, gd, ts)
 				}
-
 			}
 		}
 	}

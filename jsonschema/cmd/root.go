@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"path/filepath"
@@ -202,7 +201,7 @@ func (c *RootCmd) writeSchemaFiles(rootSchema schema.JSONSchema) error {
 
 		schemaPath := filepath.Join(absOutputDir, fname)
 
-		err = ioutil.WriteFile(schemaPath, schemaBytes, 0664)
+		err = os.WriteFile(schemaPath, schemaBytes, 0664)
 
 		c.gen.LogInfo("wrote file ", schemaPath)
 	}
@@ -258,7 +257,7 @@ func (c *RootCmd) writeSchemaFiles(rootSchema schema.JSONSchema) error {
 
 				if err == nil {
 					schemaPath := filepath.Join(absOutputDir, refToFilename(defK))
-					err = ioutil.WriteFile(schemaPath, schemaBytes, 0664)
+					err = os.WriteFile(schemaPath, schemaBytes, 0664)
 					c.gen.LogInfo("wrote file ", schemaPath)
 				}
 			}
@@ -344,7 +343,7 @@ func refToVarName(ref string) string {
 	s = strings.Replace(s, ".", " ", -1)
 	s = strings.Replace(s, "/", " ", -1)
 
-	s = strings.Title(s)
+	s = strings.ToTitle(s)
 
 	s = strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
